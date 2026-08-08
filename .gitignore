@@ -1,0 +1,30 @@
+## .NET / Visual Studio
+bin/
+obj/
+.vs/
+*.user
+*.suo
+*.cache
+*.vspscc
+*.vssscc
+
+## Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+ARM64/
+publish/
+
+## NuGet
+*.nupkg
+**/packages/*
+project.lock.json
+
+## Logs
+
+## OS
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
