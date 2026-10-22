@@ -22,6 +22,8 @@ publish/
 project.lock.json
 
 ## Logs
+scripts/PsdToSvgBatch/bin/
+scripts/PsdToSvgBatch/obj/
 
 ## OS
 Thumbs.db

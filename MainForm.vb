@@ -7,7 +7,7 @@ Imports System.Threading
 Imports ExCSS
 Imports Microsoft.Identity.Extensions
 Imports OpenCvSharp
-Imports Photoshop
+Imports System.Xml.Linq
 Imports SHDocVw
 Imports OCV = OpenCvSharp
 Imports SDI = System.Drawing.Imaging
@@ -69,7 +69,6 @@ Public Class MainForm
     Private workingMaskFileFullPath As String
 
     Private ProcessingCancellationTokenSource As CancellationTokenSource
-    Private photoshopApp As Photoshop.Application
     Private errorTotalCount As Integer = 0
     Private ReadOnly WORKING_ZOOM_PIXEL As Integer = 3000
 
@@ -77,7 +76,7 @@ Public Class MainForm
     Dim srcFilesToConvert As List(Of String)
 #End Region
 
-#Region "コンストラクタ/Photoshop COMオートメーション"
+#Region "コンストラクタ"
 
     Public Sub New()
         Directory.CreateDirectory(INPUT_DIR)
@@ -261,28 +260,6 @@ Public Class MainForm
         srcFilesToConvert = New List(Of String)
     End Sub
 
-
-    ''' <summary>
-    ''' Photoshop CS4 COM オートメーション用
-    ''' Photoshop.Application を必要に応じて生成（Visible=True, 単位=ピクセル）。
-    ''' </summary>
-    Private Sub EnsurePhotoshopApp()
-        If photoshopApp IsNot Nothing Then
-            Try
-                ' 既に生きていれば何もしない
-                Dim dummy = photoshopApp.Name
-                Return
-            Catch
-                ' 落ちていたら作り直す
-            End Try
-        End If
-
-        photoshopApp = New Photoshop.Application() With {
-            .Visible = True
-        }
-        photoshopApp.Preferences.RulerUnits = PsUnits.psPixels
-    End Sub
-
 #End Region
 
 #Region "初期更新/再読込"
@@ -379,7 +356,7 @@ Public Class MainForm
     End Sub
 
     Private Sub UpdateCounts()
-        Dim inputCount As Integer = Directory.EnumerateFiles(INPUT_DIR, "*.png").Count()
+        Dim inputCount As Integer = ListInputOriginalFiles().Count
         Dim maskCount As Integer = Directory.EnumerateFiles(MASK_DIR, "*.svg").Count()
         CountsLabel.Text = String.Format("入力ファイル: {0} / マスク {1}", inputCount, maskCount)
     End Sub
@@ -670,7 +647,6 @@ Public Class MainForm
 #Region "ワークフロー（1枚処理 / 各マスク / 全体処理）表示更新"
     Private Sub ProcessMask(inputFullPath As String, token As CancellationToken)
 
-        Dim inputCount As Integer = Directory.EnumerateFiles(INPUT_DIR, "*.png").Count()
         Dim maskSvgFiles As List(Of String) = Directory.EnumerateFiles(MASK_DIR, "*.svg").OrderBy(Function(x) x).ToList()
         Dim maskCount As Integer = maskSvgFiles.Count
 
@@ -684,8 +660,8 @@ Public Class MainForm
 
         Try
             '以下マスク共通部分
-            '(1) PSD → 3000x3000 PNG (Photoshop)
-            PreparePsdToWorkingPng(inputFullPath, workingSourcePng)
+            '(1) SVG 原画 → 3000x3000 PNG (Skia)
+            PrepareOriginalToWorkingPng(inputFullPath, workingSourcePng)
 
             Using sourceBitmap As New Bitmap(workingSourcePng)
                 '(2) A-u / A-d に分割
@@ -765,7 +741,7 @@ Public Class MainForm
                 ForceDelete(innerMaskPath)
             End If
 
-            '(5) 3000x3000 → 新原画＋サイズに縮小 (Photoshop)
+            '(5) 3000x3000 → 新原画 SVG＋Web PNG (Skia)
             FinalOutputs(combinedMat, pccId, pId, outputFileFinalName, productFullNameC)
 
         Catch ex As Exception
@@ -780,13 +756,13 @@ Public Class MainForm
     End Sub
 
     ''' <summary>
-    ''' 入力 PSD を処理するメインループ。
+    ''' 入力 SVG 原画を処理するメインループ。
     ''' </summary>
     Private Sub ProcessAll(token As CancellationToken)
 
         srcFilesToConvert.Clear()
 
-        Dim inputFiles As List(Of String) = Directory.EnumerateFiles(INPUT_DIR, "*.psd").OrderBy(Function(x) x).ToList()
+        Dim inputFiles As List(Of String) = ListInputOriginalFiles()
         Dim inputCount As Integer = inputFiles.Count
         If inputFiles.Count = 0 Then
             AppendLog("ERROR No Input Files")
@@ -919,15 +895,6 @@ Public Class MainForm
         End Using
     End Function
 
-    Private Function MatToBitmap(mat As OCV.Mat) As Bitmap
-        Dim buffer() As Byte = Nothing
-        OCV.Cv2.ImEncode(".png", mat, buffer)
-
-        Using ms As New MemoryStream(buffer)
-            Return New Bitmap(ms)
-        End Using
-    End Function
-
     ''' <summary>
     ''' 任意の Mat を BGRA (CV_8UC4) に変換するヘルパー。
     ''' </summary>
@@ -1039,77 +1006,137 @@ Public Class MainForm
     End Function
 #End Region
 
-#Region "(1) Photoshopにて指定の大きさに拡大"
+#Region "(1) SVG 原画を作業用 3000px PNG へ"
 
-    Private Sub PreparePsdToWorkingPng(inputFullPath As String, outputWorkingPngPath As String)
+    Private Function ListInputOriginalFiles() As List(Of String)
+        Return Directory.EnumerateFiles(INPUT_DIR, "*.svg").OrderBy(Function(x) x).ToList()
+    End Function
+
+    ''' <summary>SVG 原画を長辺正方形化し、WORKING_ZOOM_PIXEL へ拡大して透過 PNG を書く。</summary>
+    Private Sub PrepareOriginalToWorkingPng(inputFullPath As String, outputWorkingPngPath As String)
         StepMark("[PreparePng-")
 
-        ' 原画の最低ピクセル数（幅・高さともにこれ未満ならエラー）
-        Dim inputMinPixel As Integer = 800
-
-        Dim doc As Photoshop.Document = Nothing
+        Const inputMinPixel As Integer = 800
 
         Try
             StepMark("PP(1)-")
-            EnsurePhotoshopApp()
+            Using loaded As SK.SKBitmap = LoadSvgAsSkBitmap(inputFullPath)
+                If loaded Is Nothing Then
+                    Throw New Exception("原画 SVG の読込に失敗しました。")
+                End If
 
-            ' 幅/高さをピクセルで扱いたいので、ルーラー単位をピクセルに
-            photoshopApp.Preferences.RulerUnits = PsUnits.psPixels
-            doc = photoshopApp.Open(inputFullPath)
-            photoshopApp.ActiveDocument = doc
+                Dim originalWidth As Integer = loaded.Width
+                Dim originalHeight As Integer = loaded.Height
+                If originalWidth < inputMinPixel AndAlso originalHeight < inputMinPixel Then
+                    Throw New Exception(String.Format("原画ファイル({0}×{1}) 指定ピクセル({2})未満", originalWidth, originalHeight, inputMinPixel))
+                End If
 
-            ' (1) サイズチェック 幅・高さともに inputMinPixel 未満ならエラー
-            Dim originalWidth As Integer = CInt(doc.Width)
-            Dim originalHeight As Integer = CInt(doc.Height)
+                StepMark("PP(2)-")
+                Dim maxSide As Integer = Math.Max(originalWidth, originalHeight)
+                Using square As New SK.SKBitmap(maxSide, maxSide, SK.SKColorType.Rgba8888, SK.SKAlphaType.Premul)
+                    square.Erase(SK.SKColors.Transparent)
+                    Using canvas As New SK.SKCanvas(square)
+                        Dim ox As Single = (maxSide - originalWidth) / 2.0F
+                        Dim oy As Single = (maxSide - originalHeight) / 2.0F
+                        canvas.DrawBitmap(loaded, ox, oy)
+                    End Using
 
-            If (originalWidth < inputMinPixel) AndAlso (originalHeight < inputMinPixel) Then
-                doc.Close(PsSaveOptions.psDoNotSaveChanges)
-                Throw New Exception(String.Format("原画ファイル({0}×{1}) 指定ピクセル({2})未満", originalWidth, originalHeight, inputMinPixel))
-            End If
-
-            StepMark("PP(2)-")
-            ' (2) レイヤー構造を「見えている状態の 1 レイヤー」に統合
-            Dim tempLayer As Photoshop.ArtLayer = doc.ArtLayers.Add()
-            tempLayer.Name = "bt_merge_temp"
-            tempLayer.Opacity = 100
-            tempLayer.Visible = True
-
-            ' 可視レイヤーを 1 枚に統合(マージ結果は ActiveLayer になる)
-            doc.MergeVisibleLayers()
-            Dim mergedLayer As Photoshop.ArtLayer = CType(doc.ActiveLayer, Photoshop.ArtLayer)
-            mergedLayer.Opacity = 100
-            mergedLayer.Visible = True
-            doc.ActiveLayer = mergedLayer
-
-            StepMark("PP(3)-")
-            ' (3) 長辺を WORKING_ZOOM_PIXEL に揃えて等倍スケール（Bicubic）
-            Dim maxSide As Integer = Math.Max(originalWidth, originalHeight)
-            doc.ResizeCanvas(maxSide, maxSide, PsAnchorPosition.psMiddleCenter)
-            Dim scale As Double = WORKING_ZOOM_PIXEL / CDbl(maxSide)
-            doc.ResizeImage(WORKING_ZOOM_PIXEL, WORKING_ZOOM_PIXEL, Nothing, PsResampleMethod.psBicubic)
-
-            StepMark("PP(4)-")
-            ' (4) PNG として保存(元ファイルは非保存)
-            If doc.Mode <> PsDocumentMode.psRGB Then
-                doc.ChangeMode(PsChangeMode.psConvertToRGB)
-            End If
-            Dim pngOpts As New Photoshop.PNGSaveOptions()
-            doc.SaveAs(outputWorkingPngPath, pngOpts, True)
-            doc.Close(PsSaveOptions.psDoNotSaveChanges)
-            doc = Nothing
+                    StepMark("PP(3)-")
+                    Using resized As SK.SKBitmap = ResizeSkBitmap(square, WORKING_ZOOM_PIXEL, WORKING_ZOOM_PIXEL)
+                        StepMark("PP(4)-")
+                        SaveSkBitmapAsPng(resized, outputWorkingPngPath)
+                    End Using
+                End Using
+            End Using
 
         Catch ex As Exception
             ForceDelete(outputWorkingPngPath)
-            Throw New Exception(String.Format("Photoshop原画調整 ファイル:{0} エラー:{1}", Path.GetFileName(inputFullPath), ex.Message))
+            Throw New Exception(String.Format("原画調整 ファイル:{0} エラー:{1}", Path.GetFileName(inputFullPath), ex.Message))
         Finally
             StepMark("PP:Done]")
-            ' 念のため doc が残っていたら閉じる
-            Try
-                doc?.Close(PsSaveOptions.psDoNotSaveChanges)
-                doc = Nothing
-            Catch
-            End Try
         End Try
+    End Sub
+
+    ''' <summary>NDC SvgDirect_Svgから埋込Png読込 と同形。width/viewBox が取れなければ CullRect。</summary>
+    Private Function LoadSvgAsSkBitmap(svgPath As String) As SK.SKBitmap
+        Dim xml As XDocument = XDocument.Load(svgPath)
+        Dim root As XElement = xml.Root
+        If root Is Nothing Then
+            Return Nothing
+        End If
+
+        Dim width As Integer = ParseSvgLengthPixels(root.Attribute("width"))
+        Dim height As Integer = ParseSvgLengthPixels(root.Attribute("height"))
+        Dim viewBoxAttr As XAttribute = root.Attribute("viewBox")
+        If (width <= 0 OrElse height <= 0) AndAlso viewBoxAttr IsNot Nothing Then
+            Dim viewBoxValues() As String = CStr(viewBoxAttr).Split({" "c, ","c}, StringSplitOptions.RemoveEmptyEntries)
+            If viewBoxValues.Length = 4 Then
+                width = CInt(Math.Ceiling(Double.Parse(viewBoxValues(2), CultureInfo.InvariantCulture)))
+                height = CInt(Math.Ceiling(Double.Parse(viewBoxValues(3), CultureInfo.InvariantCulture)))
+            End If
+        End If
+
+        Using stream As FileStream = File.OpenRead(svgPath)
+            Dim skSvg As New SS.SKSvg()
+            If skSvg.Load(stream) Is Nothing OrElse skSvg.Picture Is Nothing Then
+                Return Nothing
+            End If
+
+            If width <= 0 OrElse height <= 0 Then
+                Dim cull As SK.SKRect = skSvg.Picture.CullRect
+                width = CInt(Math.Ceiling(cull.Width))
+                height = CInt(Math.Ceiling(cull.Height))
+            End If
+            If width <= 0 OrElse height <= 0 Then
+                Return Nothing
+            End If
+
+            Dim bmp As New SK.SKBitmap(width, height, SK.SKColorType.Rgba8888, SK.SKAlphaType.Premul)
+            bmp.Erase(SK.SKColors.Transparent)
+            Using canvas As New SK.SKCanvas(bmp)
+                canvas.DrawPicture(skSvg.Picture)
+            End Using
+            Return bmp
+        End Using
+    End Function
+
+    Private Shared Function ParseSvgLengthPixels(attr As XAttribute) As Integer
+        If attr Is Nothing Then
+            Return 0
+        End If
+        Dim match As Match = Regex.Match(CStr(attr), "\d+")
+        If Not match.Success Then
+            Return 0
+        End If
+        Dim value As Integer
+        If Integer.TryParse(match.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, value) Then
+            Return value
+        End If
+        Return 0
+    End Function
+
+    Private Function ResizeSkBitmap(source As SK.SKBitmap, width As Integer, height As Integer) As SK.SKBitmap
+        If source.Width = width AndAlso source.Height = height Then
+            Return source.Copy()
+        End If
+        Dim info As New SK.SKImageInfo(width, height, SK.SKColorType.Rgba8888, SK.SKAlphaType.Premul)
+        Dim resized As SK.SKBitmap = source.Resize(info, New SK.SKSamplingOptions(SK.SKCubicResampler.Mitchell))
+        If resized Is Nothing Then
+            Throw New Exception(String.Format("リサイズに失敗しました ({0}x{1} → {2}x{3})", source.Width, source.Height, width, height))
+        End If
+        Return resized
+    End Function
+
+    Private Shared Sub SaveSkBitmapAsPng(bitmap As SK.SKBitmap, pngFullPath As String)
+        Dim outDir As String = Path.GetDirectoryName(pngFullPath)
+        If Not String.IsNullOrEmpty(outDir) AndAlso Not Directory.Exists(outDir) Then
+            Directory.CreateDirectory(outDir)
+        End If
+        Using img As SK.SKImage = SK.SKImage.FromBitmap(bitmap)
+            Using data As SK.SKData = img.Encode(SK.SKEncodedImageFormat.Png, 100)
+                File.WriteAllBytes(pngFullPath, data.ToArray())
+            End Using
+        End Using
     End Sub
 
 #End Region
@@ -1384,7 +1411,7 @@ Public Class MainForm
         Dim resultMat As New OpenCvSharp.Mat
 
         Try
-            '========================  (2) aUp(Mat) → PNG保存（Photoshopで workingW × workingH リサイズ済）  ========================
+            '========================  (2) aUp(Mat) → PNG保存（workingW × workingH リサイズ済）  ========================
             StepMark("AMTO(2)-")
             Dim workingSourceMat As OpenCvSharp.Mat = ToBGRA(aUp)
             OpenCvSharp.Cv2.ImWrite(workingPngFullPath, workingSourceMat)
@@ -1702,7 +1729,7 @@ Public Class MainForm
         Dim downScaled As New OCV.Mat()
         OCV.Cv2.Resize(aDown, downScaled, New OCV.Size(), kScale, kScale, InterpolationFlags.Lanczos4)
 
-        ' 3) 口巻の α>0 外接矩形・centerX・topRow を取得
+        ' 3) 口巻の α>0 外接矩形（縦位置）と、上端4px・α≥4 の左右中央を取得
         Dim downChannels() As OCV.Mat = downScaled.Split()
         Dim downAlpha As OCV.Mat = downChannels(3)
 
@@ -1732,7 +1759,10 @@ Public Class MainForm
         Dim boundingRect As Rect = OCV.Cv2.BoundingRect(nonZeroPoints)
 
         Dim topRow As Integer = boundingRect.Y
-        Dim centerX As Integer = boundingRect.X + boundingRect.Width \ 2
+        Dim centerX As Integer = FindMouthTopCenterX(downAlpha)
+        If centerX < 0 Then
+            centerX = boundingRect.X + boundingRect.Width \ 2
+        End If
 
         ' 4) A-u の「不透明最下行」（口巻が触れる位置）を探す
         Dim bottomOpaqueRow As Integer = FindBottomNonTransparent(upFit)
@@ -1789,7 +1819,10 @@ Public Class MainForm
 
                 boundingRect = OCV.Cv2.BoundingRect(nonZeroPoints)
                 topRow = boundingRect.Y
-                centerX = boundingRect.X + boundingRect.Width \ 2
+                centerX = FindMouthTopCenterX(downAlpha)
+                If centerX < 0 Then
+                    centerX = boundingRect.X + boundingRect.Width \ 2
+                End If
 
                 dstY = (bottomOpaqueRow - overlapPx) - topRow
                 dstX = (outW \ 2) - centerX
@@ -1878,6 +1911,53 @@ Public Class MainForm
         Return result
     End Function
 
+
+    ''' <summary>
+    ''' 口巻αマップの、α≥4 となる最上行から4行の minX/maxX 中点を返す。
+    ''' 見つからなければ -1。
+    ''' </summary>
+    Private Function FindMouthTopCenterX(alpha As OCV.Mat) As Integer
+        Const topRowCount As Integer = 4
+        ' THRESH_BINARY は src > thresh なので、3 なら α≥4
+        Const alphaThresh As Double = 3
+
+        If alpha Is Nothing OrElse alpha.Empty() Then
+            Return -1
+        End If
+
+        Using opaqueMask As New OCV.Mat()
+            OCV.Cv2.Threshold(alpha, opaqueMask, alphaThresh, 255, ThresholdTypes.Binary)
+
+            Dim firstY As Integer = -1
+            For y As Integer = 0 To opaqueMask.Rows - 1
+                Using row As OCV.Mat = opaqueMask.Row(y)
+                    If OCV.Cv2.CountNonZero(row) > 0 Then
+                        firstY = y
+                        Exit For
+                    End If
+                End Using
+            Next
+
+            If firstY < 0 Then
+                Return -1
+            End If
+
+            Dim rowCount As Integer = Math.Min(topRowCount, opaqueMask.Rows - firstY)
+            Dim topRoi As New Rect(0, firstY, opaqueMask.Cols, rowCount)
+
+            Using topRows As New OCV.Mat(opaqueMask, topRoi)
+                Using topNonZero As New OCV.Mat()
+                    OCV.Cv2.FindNonZero(topRows, topNonZero)
+                    If topNonZero.Empty() Then
+                        Return -1
+                    End If
+
+                    Dim topRect As Rect = OCV.Cv2.BoundingRect(topNonZero)
+                    Return topRect.X + topRect.Width \ 2
+                End Using
+            End Using
+        End Using
+    End Function
 
     ''' <summary>
     ''' A-u の不透明最下行探索
@@ -2207,8 +2287,8 @@ Public Class MainForm
     End Function
 
     ''' <summary>
-    ''' 3000x3000 から 1500（03_最終.svg 正本 + 02_編集.psd）および 800/400/150/60 (png) を生成し置換する。
-    ''' pccId は ProcessOne 側で解決済みであること。
+    ''' 3000x3000 から 1500（03_最終.svg 正本）および 800/400/150/60 (png) を Skia で生成する。
+    ''' 02_編集 PSD は書かない。pccId は ProcessOne 側で解決済みであること。
     ''' </summary>
     Private Sub FinalOutputs(
             combinedMat As OCV.Mat,
@@ -2242,186 +2322,98 @@ Public Class MainForm
         End If
 
         Dim finalDir As String = Path.Combine(productBaseFolder, cls商品.最終サブフォルダ)
-        Dim editDir As String = Path.Combine(productBaseFolder, cls商品.編集サブフォルダ)
         If Not Directory.Exists(finalDir) Then
             Directory.CreateDirectory(finalDir)
         End If
-        If Not Directory.Exists(editDir) Then
-            Directory.CreateDirectory(editDir)
-        End If
-
-        Dim workingOutPng As String = String.Empty
-        Dim tempPsdPath As String = String.Empty
-        Dim tempSvgPngPath As String = String.Empty
 
         Try
-            Dim workingDir As String = Path.GetTempPath()
-            workingOutPng = Path.Combine(workingDir, "bt_src3k_" & Guid.NewGuid().ToString("N") & ".png")
+            Dim pngBytes() As Byte = Nothing
+            OCV.Cv2.ImEncode(".png", combinedMat, pngBytes)
+            If pngBytes Is Nothing OrElse pngBytes.Length = 0 Then
+                Throw New Exception("合成画像の PNG 化に失敗しました。")
+            End If
 
-            Using workingOutBmp As Bitmap = MatToBitmap(combinedMat)
-                SavePng(workingOutBmp, workingOutPng)
+            Using master As SK.SKBitmap = SK.SKBitmap.Decode(pngBytes)
+                If master Is Nothing Then
+                    Throw New Exception("合成画像の読込に失敗しました。")
+                End If
+
+                Dim targetPixels As New List(Of Integer) From {1500, 800, 400, 150, 60}
+                For Each targetPixel In targetPixels
+                    StepMark(String.Format("FO({0})-", targetPixel))
+                    Using sized As SK.SKBitmap = ResizeSkBitmap(master, targetPixel, targetPixel)
+                        If targetPixel = 1500 Then
+                            Dim svgFileName As String = outputFileFinalName & ".svg"
+                            Dim svgFullPath As String = Path.Combine(finalDir, svgFileName)
+                            SaveEmbeddedSvgFromBitmap(sized, svgFullPath)
+                            If Not File.Exists(svgFullPath) Then
+                                Throw New Exception("03_最終 への SVG 保存に失敗しました: " & svgFullPath)
+                            End If
+                            logLineBuilder.AppendFormat("原画SVG:{1}{0}", vbTab, svgFullPath)
+
+                            clsNDC.ExecuteNonQueryNDC(
+                                "UPDATE dbo.tbl402商品色コード SET 原画ファイル = {1} WHERE (商品色コードID = {0})",
+                                pccId,
+                                clsNDC.EscapeSQLString(svgFileName))
+                        Else
+                            Dim webPictureIndex As Integer = Array.IndexOf(clsWeb.webPictureWidth, targetPixel)
+                            Dim outputFullPath As String = String.Format(
+                                "{0}\product-color-code\id{1:0000}000\id{2:0000000}-{3}.png",
+                                clsWeb.WEBROOT_IMG_DB_SRC,
+                                pccId \ 1000,
+                                pccId,
+                                clsWeb.webPictureWidth(webPictureIndex))
+                            SaveSkBitmapAsPng(sized, outputFullPath)
+
+                            If targetPixel = 400 Then
+                                UpdateOutputPreview(outputFullPath)
+                            End If
+                        End If
+                    End Using
+                Next
             End Using
 
-            ' 1500: 03_最終.svg + 02_編集.psd / 800・400・150・60: Web png
-            Dim targetPixels As New List(Of Integer) From {1500, 800, 400, 150, 60}
-
-            StepMark("FO(Open)-")
-            EnsurePhotoshopApp()
-            Dim doc As Photoshop.Document = photoshopApp.Open(workingOutPng)
-            Dim pngOpts As New Photoshop.PNGSaveOptions()
-
-            Dim method As PsResampleMethod
-            Dim outputFullPath As String = ""
-
-            For Each targetPixel In targetPixels
-                StepMark(String.Format("FO({0})-", targetPixel))
-                Dim docClone = doc.Duplicate
-                Try
-                    If targetPixel > 400 Then
-                        method = PsResampleMethod.psBicubic
-                    Else
-                        method = PsResampleMethod.psBicubicSharper
-                    End If
-                    docClone.ResizeImage(targetPixel, targetPixel, Nothing, method)
-
-                    If targetPixel = 1500 Then
-                        ' 1) 原画正本 SVG（透明）→ 03_最終
-                        tempSvgPngPath = Path.Combine(workingDir, "bt_svg_" & Guid.NewGuid().ToString("N") & ".png")
-                        ForceDelete(tempSvgPngPath)
-                        ExportTransparentPngFromPhotoshop(docClone, tempSvgPngPath)
-
-                        Dim svgFileName As String = outputFileFinalName & ".svg"
-                        Dim svgFullPath As String = Path.Combine(finalDir, svgFileName)
-                        SaveTransparentSvgFromPngFile(tempSvgPngPath, svgFullPath)
-                        If Not File.Exists(svgFullPath) Then
-                            Throw New Exception("03_最終 への SVG 保存に失敗しました: " & svgFullPath)
-                        End If
-                        logLineBuilder.AppendFormat("原画SVG:{1}{0}", vbTab, svgFullPath)
-
-                        clsNDC.ExecuteNonQueryNDC(
-                            "UPDATE dbo.tbl402商品色コード SET 原画ファイル = {1} WHERE (商品色コードID = {0})",
-                            pccId,
-                            clsNDC.EscapeSQLString(svgFileName))
-
-                        ' 2) SVG 成功後: 02_編集 の同名 PSD があれば history なしで削除してから配置
-                        tempPsdPath = Path.Combine(workingDir, outputFileFinalName & ".psd")
-                        ForceDelete(tempPsdPath)
-                        docClone.SaveAs(tempPsdPath, Nothing)
-
-                        Dim editPsdPath As String = Path.Combine(editDir, outputFileFinalName & ".psd")
-                        If File.Exists(editPsdPath) Then
-                            ForceDelete(editPsdPath)
-                            logLineBuilder.AppendFormat("編集PSD削除(同名):{1}{0}", vbTab, editPsdPath)
-                        End If
-                        File.Copy(tempPsdPath, editPsdPath, True)
-                        logLineBuilder.AppendFormat("編集PSD:{1}{0}", vbTab, editPsdPath)
-                    Else
-                        Dim webPictureIndex As Integer = Array.IndexOf(clsWeb.webPictureWidth, targetPixel)
-                        outputFullPath = String.Format(
-                            "{0}\product-color-code\id{1:0000}000\id{2:0000000}-{3}.png",
-                            clsWeb.WEBROOT_IMG_DB_SRC,
-                            pccId \ 1000,
-                            pccId,
-                            clsWeb.webPictureWidth(webPictureIndex))
-                        Dim webDir As String = Path.GetDirectoryName(outputFullPath)
-                        If Not String.IsNullOrEmpty(webDir) AndAlso Not Directory.Exists(webDir) Then
-                            Directory.CreateDirectory(webDir)
-                        End If
-                        docClone.SaveAs(outputFullPath, pngOpts)
-
-                        If targetPixel = 400 Then
-                            UpdateOutputPreview(outputFullPath)
-                        End If
-                    End If
-                Finally
-                    Try
-                        docClone.Close(PsSaveOptions.psDoNotSaveChanges)
-                    Catch
-                    End Try
-                End Try
-            Next
-
-            doc.Close(PsSaveOptions.psDoNotSaveChanges)
             StepMark("Done]")
 
         Catch ex As Exception
             logLineBuilder.AppendFormat("最終出力例外({1}){0}", vbTab, ex.Message)
             AppendLog(String.Format("FinalOutputs例外 {0}", ex.Message), True)
-        Finally
-            ForceDelete(workingOutPng)
-            ForceDelete(tempPsdPath)
-            ForceDelete(tempSvgPngPath)
         End Try
 
         LogFile(logLineBuilder.ToString)
 
     End Sub
 
-    ''' <summary>Photoshop ドキュメントを透明 PNG として書き出す（背景を白塗りしない）。</summary>
-    Private Sub ExportTransparentPngFromPhotoshop(doc As Photoshop.Document, pngFullPath As String)
-        Try
-            Dim eow As New ExportOptionsSaveForWeb() With {
-                .Format = PsSaveDocumentType.psPNGSave,
-                .PNG8 = False,
-                .Transparency = True
-            }
-            doc.Export(pngFullPath, PsExportType.psSaveForWeb, eow)
-        Catch
-            Dim pngOpts As New Photoshop.PNGSaveOptions()
-            doc.SaveAs(pngFullPath, pngOpts, True)
-        End Try
-
-        If Not File.Exists(pngFullPath) Then
-            Throw New Exception("透明 PNG の Export に失敗しました: " & pngFullPath)
-        End If
-    End Sub
-
     ''' <summary>
-    ''' 透明 PNG を埋め込み SVG として保存（NDC SvgDirect_SaveSvgShared と同形）。
-    ''' 背景色は付けず、PNG のアルファをそのまま正本とする。
+    ''' 正方形 SKBitmap を埋め込み PNG の SVG として保存（NDC SvgDirect_SaveSvgShared と同形）。
     ''' </summary>
-    Private Shared Sub SaveTransparentSvgFromPngFile(pngFullPath As String, svgFullPath As String)
-        Using loaded As SK.SKBitmap = SK.SKBitmap.Decode(pngFullPath)
-            If loaded Is Nothing Then
-                Throw New Exception("SVG 用 PNG の読込に失敗しました: " & pngFullPath)
-            End If
-
-            Dim side As Integer = Math.Max(loaded.Width, loaded.Height)
-            Using square As New SK.SKBitmap(side, side, SK.SKColorType.Rgba8888, SK.SKAlphaType.Premul)
-                square.Erase(SK.SKColors.Transparent)
-                Using canvas As New SK.SKCanvas(square)
-                    Dim ox As Single = (side - loaded.Width) / 2.0F
-                    Dim oy As Single = (side - loaded.Height) / 2.0F
-                    canvas.DrawBitmap(loaded, ox, oy)
-                End Using
-
-                Dim pngBytes As Byte()
-                Using img As SK.SKImage = SK.SKImage.FromBitmap(square)
-                    Using data As SK.SKData = img.Encode(SK.SKEncodedImageFormat.Png, 100)
-                        pngBytes = data.ToArray()
-                    End Using
-                End Using
-
-                Dim b64 As String = Convert.ToBase64String(pngBytes)
-                Dim sb As New StringBuilder()
-                sb.AppendLine("<?xml version=""1.0"" encoding=""UTF-8""?>")
-                sb.AppendFormat(
-                    CultureInfo.InvariantCulture,
-                    "<svg xmlns=""http://www.w3.org/2000/svg"" xmlns:xlink=""http://www.w3.org/1999/xlink"" width=""{0}px"" height=""{0}px"" viewBox=""0 0 {0} {0}"">" & vbCrLf,
-                    side)
-                sb.AppendFormat(
-                    CultureInfo.InvariantCulture,
-                    "  <image width=""{0}"" height=""{0}"" xlink:href=""data:image/png;base64,{1}"" href=""data:image/png;base64,{1}"" />" & vbCrLf,
-                    side, b64)
-                sb.AppendLine("</svg>")
-
-                Dim outDir As String = Path.GetDirectoryName(svgFullPath)
-                If Not String.IsNullOrEmpty(outDir) AndAlso Not Directory.Exists(outDir) Then
-                    Directory.CreateDirectory(outDir)
-                End If
-                File.WriteAllText(svgFullPath, sb.ToString(), New UTF8Encoding(encoderShouldEmitUTF8Identifier:=False))
+    Private Shared Sub SaveEmbeddedSvgFromBitmap(master As SK.SKBitmap, svgFullPath As String)
+        Dim side As Integer = master.Width
+        Dim pngBytes As Byte()
+        Using img As SK.SKImage = SK.SKImage.FromBitmap(master)
+            Using data As SK.SKData = img.Encode(SK.SKEncodedImageFormat.Png, 100)
+                pngBytes = data.ToArray()
             End Using
         End Using
+
+        Dim b64 As String = Convert.ToBase64String(pngBytes)
+        Dim sb As New StringBuilder()
+        sb.AppendLine("<?xml version=""1.0"" encoding=""UTF-8""?>")
+        sb.AppendFormat(
+            CultureInfo.InvariantCulture,
+            "<svg xmlns=""http://www.w3.org/2000/svg"" xmlns:xlink=""http://www.w3.org/1999/xlink"" width=""{0}px"" height=""{0}px"" viewBox=""0 0 {0} {0}"">" & vbCrLf,
+            side)
+        sb.AppendFormat(
+            CultureInfo.InvariantCulture,
+            "  <image width=""{0}"" height=""{0}"" xlink:href=""data:image/png;base64,{1}"" href=""data:image/png;base64,{1}"" />" & vbCrLf,
+            side, b64)
+        sb.AppendLine("</svg>")
+
+        Dim outDir As String = Path.GetDirectoryName(svgFullPath)
+        If Not String.IsNullOrEmpty(outDir) AndAlso Not Directory.Exists(outDir) Then
+            Directory.CreateDirectory(outDir)
+        End If
+        File.WriteAllText(svgFullPath, sb.ToString(), New UTF8Encoding(encoderShouldEmitUTF8Identifier:=False))
     End Sub
 
 #End Region
