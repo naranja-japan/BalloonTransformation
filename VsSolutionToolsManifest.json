@@ -1,0 +1,16 @@
+{
+  "appKey": "BalloonTransformation",
+  "deployProfile": "SdkSingleApp",
+  "mainProject": "BalloonTransformation/BalloonTransformation.csproj",
+  "publishOutputRelative": "BalloonTransformation/bin/Release/publish",
+  "platformPackagePrefixes": [
+    "Naranja.Platform.Common",
+    "Naranja.Platform.Data"
+  ],
+  "shortcut": {
+    "baseName": "BalloonTransformation",
+    "appUserModelId": "Naranja.BalloonTransformation",
+    "description": "Balloon Transformation",
+    "mainExeName": "BalloonTransformation.exe"
+  }
+}

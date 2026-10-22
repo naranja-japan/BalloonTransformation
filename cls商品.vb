@@ -176,16 +176,24 @@ Public Class cls商品
                 Return False
             End If
 
-            Dim strBrand As String = String.Empty
+            ' NDC と同形: …\{brand}\ID{万単位レンジ}-\ID{商品ID7桁}
+            Dim brandFolderName As String = String.Empty
             Select Case clsNDC.GetSqlShort(0, "SELECT ブランドID FROM tbl401商品 WHERE (商品ID = {0})", productId)
-                Case 8 : strBrand = "4100_juggling\"
-                Case 9 : strBrand = "4200_balloon\"
-                Case 10 : strBrand = "4300_bar\"
+                Case 8 : brandFolderName = "4100_juggling"
+                Case 9 : brandFolderName = "4200_balloon"
+                Case 10 : brandFolderName = "4300_bar"
                 Case Else
-                    strBrand = "4900_company\"
+                    brandFolderName = "4900_company"
             End Select
-            basePath = String.Format("{0}\naranja\4000_商品画像\{1}ID{2:0000000}", clsNDC.dfsRoot, strBrand, productId)
-            If Not Directory.Exists(basePath) Then Directory.CreateDirectory(basePath)
+            basePath = String.Format(
+                "{0}\naranja\4000_商品画像\{1}\ID{2:000}0000-\ID{3:0000000}",
+                clsNDC.dfsRoot,
+                brandFolderName,
+                productId \ 10000,
+                productId)
+            If Not Directory.Exists(basePath) Then
+                Directory.CreateDirectory(basePath)
+            End If
             Dim strSubDirectory() As String = New String() {
                 "01_写真", "01_写真\history",
                 "02_編集", "02_編集\history",

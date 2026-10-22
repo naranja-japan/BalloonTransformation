@@ -28,14 +28,7 @@
       <Isolated>false</Isolated>
       <EmbedInteropTypes>true</EmbedInteropTypes>
     </COMReference>
-    </ItemGroup>
-
-    <ItemGroup>
-      <COMFileReference Include="C:\Program Files\Adobe\Adobe Photoshop CS4 (64 Bit)\Plug-ins\Extensions\ScriptingSupport.8li">
-        <WrapperTool>tlbimp</WrapperTool>
-        <EmbedInteropTypes>false</EmbedInteropTypes>
-      </COMFileReference>
-    </ItemGroup>
+  </ItemGroup>
 
   <ItemGroup>
     <Import Include="System.Data" />
