@@ -20,17 +20,18 @@
   既定: \\naranja.local\dfs02\naranja\4000_商品画像\4200_balloon
 
 .PARAMETER BackupRoot
-  既定: C:\Users\nakashimajunichiro\Desktop\ToDo未清算\sempertex20260808
+  バックアップ先。呼び出し側が渡す。
 
 .EXAMPLE
-  pwsh -File .\scripts\Cleanup-MisplacedBalloonFolders.ps1
-  pwsh -File .\scripts\Cleanup-MisplacedBalloonFolders.ps1 -Execute
+  pwsh -File .\scripts\Cleanup-MisplacedBalloonFolders.ps1 -BackupRoot .\backup
+  pwsh -File .\scripts\Cleanup-MisplacedBalloonFolders.ps1 -BackupRoot .\backup -Execute
 #>
 [CmdletBinding()]
 param(
     [switch]$Execute,
     [string]$BalloonRoot = '\\naranja.local\dfs02\naranja\4000_商品画像\4200_balloon',
-    [string]$BackupRoot = 'C:\Users\nakashimajunichiro\Desktop\ToDo未清算\sempertex20260808',
+    [Parameter(Mandatory = $true)]
+    [string]$BackupRoot,
     [string]$ConnectionString = 'Data Source=svsql02;Initial Catalog=db_naranja;Integrated Security=True;TrustServerCertificate=True',
     [datetime]$Cutoff = '2026-02-01'
 )
