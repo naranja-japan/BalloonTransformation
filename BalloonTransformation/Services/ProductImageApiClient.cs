@@ -24,7 +24,7 @@ internal sealed class ProductImageApiClient
         try
         {
             using var response = Http.GetAsync(
-                $"/api/product-images/by-full-name?fullName={Uri.EscapeDataString(fullName)}")
+                $"/api/apps/balloon-transformation/product-image-full-name?fullName={Uri.EscapeDataString(fullName)}")
                 .GetAwaiter().GetResult();
             if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
                 return null;
@@ -45,7 +45,7 @@ internal sealed class ProductImageApiClient
         try
         {
             using var response = Http.PutAsJsonAsync(
-                $"/api/product-images/{productColorCodeId}/original-file",
+                $"/api/apps/balloon-transformation/product-image-original-file/{productColorCodeId}",
                 new { fileName },
                 JsonOptions).GetAwaiter().GetResult();
             if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
