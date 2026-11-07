@@ -1,11 +1,9 @@
-using Microsoft.EntityFrameworkCore;
-using Naranja.Platform.Data.Base;
-
 namespace Naranja.BalloonTransformation.Services;
 
 public sealed record ProductColorResolution(
     int ProductColorCodeId,
     int ProductId,
+    short BrandId,
     string OutputFileStem,
     string ProductFullName,
     string StatusText,
@@ -13,6 +11,8 @@ public sealed record ProductColorResolution(
 
 public static class ProductImageService
 {
+    private static readonly ProductImageApiClient Api = new();
+
     public static ProductColorResolution? ResolveByFullName(string maskPath, string inputPath)
     {
         var stem = $"_{Path.GetFileNameWithoutExtension(maskPath)}_{Path.GetFileNameWithoutExtension(inputPath)}_";
@@ -25,15 +25,7 @@ public static class ProductImageService
             return null;
         }
 
-        using var db = new DbNaranjaContext();
-        var hit = (
-            from c in db.ProductColorCodeSet
-            join p in db.ProductSet on c.ProductId equals p.Id
-            where c.ProductFullName == fullName
-            orderby p.IsDiscontinued, c.IsAvailable descending
-            select new { c.Id, c.ProductId, p.IsDiscontinued, c.IsAvailable, c.OriginalImageFile }
-        ).FirstOrDefault();
-
+        var hit = Api.GetByFullName(fullName);
         if (hit is null)
         {
             return null;
@@ -44,7 +36,7 @@ public static class ProductImageService
             : hit.IsAvailable ? "〇" : "(現在選択不可)";
 
         string? existing = null;
-        var folder = GetProductImageFolder(hit.ProductId);
+        var folder = GetProductImageFolder(hit.ProductId, hit.BrandId);
         if (!string.IsNullOrEmpty(hit.OriginalImageFile) && folder is not null)
         {
             var candidate = Path.Combine(folder, AppPaths.FinalSubFolder, hit.OriginalImageFile);
@@ -55,29 +47,23 @@ public static class ProductImageService
         }
 
         return new ProductColorResolution(
-            hit.Id,
+            hit.ProductColorCodeId,
             hit.ProductId,
+            hit.BrandId,
             stem,
             fullName,
             status,
             existing);
     }
 
-    public static string? GetProductImageFolder(int productId, bool create = true)
+    public static string? GetProductImageFolder(int productId, short brandId, bool create = true)
     {
         if (productId <= 0)
         {
             return null;
         }
 
-        using var db = new DbNaranjaContext();
-        var brandId = db.ProductSet.Where(p => p.Id == productId).Select(p => (short?)p.BrandId).FirstOrDefault();
-        if (brandId is null)
-        {
-            return null;
-        }
-
-        var brandFolder = brandId.Value switch
+        var brandFolder = brandId switch
         {
             8 => "4100_juggling",
             9 => "4200_balloon",
@@ -110,15 +96,5 @@ public static class ProductImageService
     }
 
     public static void UpdateOriginalImageFile(int productColorCodeId, string svgFileName)
-    {
-        using var db = new DbNaranjaContext();
-        var row = db.ProductColorCodeSet.FirstOrDefault(c => c.Id == productColorCodeId);
-        if (row is null)
-        {
-            return;
-        }
-
-        row.OriginalImageFile = svgFileName;
-        db.SaveChanges();
-    }
+        => Api.UpdateOriginalImageFile(productColorCodeId, svgFileName);
 }

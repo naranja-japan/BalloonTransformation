@@ -675,7 +675,7 @@ public static class ImageProcessingService
     public static void WriteFinalOutputs(Mat combined, ProductColorResolution resolved, Action<string>? log, out string? previewPngPath)
     {
         previewPngPath = null;
-        var productBase = ProductImageService.GetProductImageFolder(resolved.ProductId);
+        var productBase = ProductImageService.GetProductImageFolder(resolved.ProductId, resolved.BrandId);
         if (productBase is null)
         {
             log?.Invoke($"FinalOutputsスキップ 画像用フォルダ取得失敗: {resolved.ProductFullName}");
