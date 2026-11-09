@@ -1,11 +1,12 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using Naranja.Platform.Common;
 
 namespace Naranja.BalloonTransformation.Services;
 
 internal sealed class ProductImageApiClient
 {
-    private const string BaseAddress = "http://localhost:5180";
+    private const string BaseAddress = LocalApiHost.BaseAddress;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -23,6 +24,7 @@ internal sealed class ProductImageApiClient
     {
         try
         {
+            LocalApiHost.EnsureReady();
             using var response = Http.GetAsync(
                 $"/api/apps/balloon-transformation/product-image-full-name?fullName={Uri.EscapeDataString(fullName)}")
                 .GetAwaiter().GetResult();
@@ -44,6 +46,7 @@ internal sealed class ProductImageApiClient
     {
         try
         {
+            LocalApiHost.EnsureReady();
             using var response = Http.PutAsJsonAsync(
                 $"/api/apps/balloon-transformation/product-image-original-file/{productColorCodeId}",
                 new { fileName },
