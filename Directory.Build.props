@@ -1,5 +1,7 @@
 <Project>
   <PropertyGroup>
     <Version>1.2026.1109.1346</Version>
+    <NetTargetFramework>net11.0</NetTargetFramework>
+    <WindowsTargetFramework>net11.0-windows10.0.19041.0</WindowsTargetFramework>
   </PropertyGroup>
 </Project>
