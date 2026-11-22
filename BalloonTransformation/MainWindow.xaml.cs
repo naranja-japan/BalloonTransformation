@@ -10,10 +10,19 @@ namespace Naranja.BalloonTransformation;
 public sealed partial class MainWindow : Window
 {
     private CancellationTokenSource? _cts;
+    private SdkAppLocalUpdateUi? _localUpdate;
 
     public MainWindow()
     {
         InitializeComponent();
+        _localUpdate = new SdkAppLocalUpdateUi(
+            "BalloonTransformation",
+            UpdateBar,
+            UpdateBarMessageText,
+            UpdateLaterButton,
+            UpdateButton,
+            msg => LogBox.Text += msg + Environment.NewLine);
+        _localUpdate.Check();
         AppPaths.EnsureWorkFolders();
         InputPathLink.Content = "入力: " + AppPaths.InputDir;
         InputPathLink.Tag = AppPaths.InputDir;

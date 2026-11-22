@@ -17,6 +17,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
@@ -24,7 +25,50 @@
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
-        <StackPanel Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="8">
+        <InfoBar
+            x:Name="UpdateBar"
+            Grid.Row="0"
+            Grid.Column="0"
+            Grid.ColumnSpan="2"
+            IsOpen="False"
+            IsClosable="True"
+            Severity="Informational">
+            <InfoBar.Content>
+                <Grid VerticalAlignment="Center" ColumnSpacing="12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock
+                        x:Name="UpdateBarTitleText"
+                        FontSize="16"
+                        FontWeight="Bold"
+                        VerticalAlignment="Center"
+                        Text="更新があります" />
+                    <TextBlock
+                        x:Name="UpdateBarMessageText"
+                        Grid.Column="1"
+                        FontSize="16"
+                        TextWrapping="Wrap"
+                        VerticalAlignment="Center" />
+                    <StackPanel
+                        Grid.Column="2"
+                        Orientation="Horizontal"
+                        Spacing="8"
+                        VerticalAlignment="Center">
+                        <Button x:Name="UpdateLaterButton" Content="後で" FontSize="16" />
+                        <Button
+                            x:Name="UpdateButton"
+                            Content="更新"
+                            FontSize="16"
+                            Style="{StaticResource AccentButtonStyle}" />
+                    </StackPanel>
+                </Grid>
+            </InfoBar.Content>
+        </InfoBar>
+
+        <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="8">
             <Button x:Name="RunButton" Content="実行" Click="RunButton_Click" />
             <Button x:Name="CancelButton" Content="キャンセル" IsEnabled="False" Click="CancelButton_Click" />
             <Button x:Name="RefreshButton" Content="更新" Click="RefreshButton_Click" />
@@ -32,7 +76,7 @@
             <TextBlock x:Name="ProgressLabel" VerticalAlignment="Center" Text="進捗: 0/0" />
         </StackPanel>
 
-        <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Spacing="2">
+        <StackPanel Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Spacing="2">
             <HyperlinkButton x:Name="InputPathLink" Click="PathLink_Click" />
             <HyperlinkButton x:Name="MaskPathLink" Click="PathLink_Click" />
             <HyperlinkButton x:Name="OutputPathLink" Click="PathLink_Click" />
@@ -40,7 +84,7 @@
             <TextBlock x:Name="CountsLabel" />
         </StackPanel>
 
-        <Grid Grid.Row="2" Grid.Column="0" RowSpacing="8">
+        <Grid Grid.Row="3" Grid.Column="0" RowSpacing="8">
             <Grid.RowDefinitions>
                 <RowDefinition Height="*" />
                 <RowDefinition Height="*" />
@@ -59,7 +103,7 @@
             </Border>
         </Grid>
 
-        <Grid Grid.Row="2" Grid.Column="1" RowSpacing="8">
+        <Grid Grid.Row="3" Grid.Column="1" RowSpacing="8">
             <Grid.RowDefinitions>
                 <RowDefinition Height="120" />
                 <RowDefinition Height="*" />
